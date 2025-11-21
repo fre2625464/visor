@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -238,20 +239,4 @@ animate();
 
 // ---------------------------
 // Vista AR
-// ---------------------------
-document.getElementById("arBtn").onclick = () => {
-    document.getElementById("arViewer").activateAR();
-};
-
-// ---------------------------
-// Resize
-// ---------------------------
-window.addEventListener("resize", () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-});
-</script>
-
-</body>
-</html>
+// --------------
