@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Visor 3D Completo + AR</title>
+
+<!-- Modelo en AR -->
+<script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+
+<style>
+    body {
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+        font-family: Arial, sans-serif;
+    }
+    #panel {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background: rgba(255,255,255,0.9);
+        padding: 12px;
+        border-radius: 10px;
+        z-index: 10;
+        width: 180px;
+    }
+    #panel label {
+        font-size: 14px;
+        font-weight: bold;
+    }
+    #panel input, #panel button {
+        width: 100%;
+        margin-top: 6px;
+        margin-bottom: 10px;
+    }
+    #distance {
+        position: absolute;
+        bottom: 10px;
+        left: 10px;
+        color: #000;
+        background: rgba(255,255,255,0.8);
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-size: 14px;
+        z-index: 10;
+        display: none;
+    }
+</style>
+</head>
+
+<body>
+
+<!-- Panel de control -->
+<div id="panel">
+    <label>Subir modelo 3D:</label>
+    <input type="file" id="fileInput" accept=".stl,.obj,.ply,.glb,.gltf">
+
+    <label>Color del modelo:</label>
+    <input type="color" id="colorPicker" value="#5588ff">
+
+    <label>
+        <input type="checkbox" id="autoRotate"> Auto-rotación
+    </label>
+
+    <button id="measureBtn">Medir distancia</button>
+    <button id="arBtn" disabled>Ver en AR (solo GLB)</button>
+</div>
+
+<div id="distance"></div>
+
+<!-- Modelo AR invisible hasta que se use -->
+<model-viewer id="arViewer" ar ar-modes="scene-viewer webxr quick-look" 
+    style="width:0; height:0; visibility:hidden;"> 
+</model-viewer>
+
+<!-- THREE.js -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/STLLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/PLYLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/OBJLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
+
+<script>
+let scene, camera, renderer, controls, model;
+let measuring = false;
+let points = [];
+let measureLine;
+
+// ---------------------------
+// Escena base
+// ---------------------------
+scene = new THREE.Scene();
+scene.background = null; // Fondo transparente
+
+camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(2, 2, 3);
+
+renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+// Luces
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
+let dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(5, 10, 7);
+scene.add(dirLight);
+
+// Material por defecto
+let material = new THREE.MeshPhongMaterial({ color: 0x5588ff });
+
+// ---------------------------
+// Cargar archivo 3D
+// ---------------------------
+document.getElementById("fileInput").addEventListener("change", load3DFile);
+
+function load3DFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    let extension = file.name.split(".").pop().toLowerCase();
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        let data = e.target.result;
+        if (model) scene.remove(model);
+
+        switch (extension) {
+            case "stl":
+                model = new THREE.Mesh(new THREE.STLLoader().parse(data), material);
+                finalizeModel();
+                break;
+
+            case "ply":
+                model = new THREE.Mesh(new THREE.PLYLoader().parse(data), material);
+                finalizeModel();
+                break;
+
+            case "obj":
+                model = new THREE.OBJLoader().parse(data);
+                model.traverse(c => { if (c.isMesh) c.material = material; });
+                finalizeModel();
+                break;
+
+            case "glb":
+            case "gltf":
+                new THREE.GLTFLoader().parse(data, "", (gltf) => {
+                    model = gltf.scene;
+                    finalizeModel();
+                });
+                // Activar AR
+                const url = URL.createObjectURL(file);
+                document.getElementById("arViewer").src = url;
+                document.getElementById("arBtn").disabled = false;
+                break;
+
+            default:
+                alert("Formato no soportado.");
+        }
+    };
+
+    if (["glb", "gltf"].includes(extension)) reader.readAsArrayBuffer(file);
+    else reader.readAsArrayBuffer(file);
+}
+
+function finalizeModel() {
+    model.traverse(c => { if (c.isMesh) c.geometry.center(); });
+    scene.add(model);
+}
+
+// ---------------------------
+// Cambiar color
+// ---------------------------
+document.getElementById("colorPicker").addEventListener("input", (e) => {
+    if (!model) return;
+    model.traverse(c => { if (c.isMesh) c.material.color.set(e.target.value); });
+});
+
+// ---------------------------
+// Medición de distancias
+// ---------------------------
+document.getElementById("measureBtn").onclick = () => {
+    measuring = !measuring;
+    points = [];
+    document.getElementById("distance").style.display = "none";
+};
+
+renderer.domElement.addEventListener("pointerdown", (event) => {
+    if (!measuring || !model) return;
+
+    let rect = renderer.domElement.getBoundingClientRect();
+    let mouse = new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1
+    );
+
+    let raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(mouse, camera);
+    let intersects = raycaster.intersectObjects(scene.children, true);
+
+    if (intersects.length > 0) {
+        points.push(intersects[0].point);
+
+        if (points.length === 2) {
+            let d = points[0].distanceTo(points[1]);
+
+            if (measureLine) scene.remove(measureLine);
+            let geo = new THREE.BufferGeometry().setFromPoints(points);
+            let mat = new THREE.LineBasicMaterial({ color: 0xff0000 });
+            measureLine = new THREE.Line(geo, mat);
+            scene.add(measureLine);
+
+            document.getElementById("distance").innerHTML = 
+                "Distancia: " + d.toFixed(3) + " unidades";
+            document.getElementById("distance").style.display = "block";
+
+            points = [];
+        }
+    }
+});
+
+// ---------------------------
+// Auto-rotación
+// ---------------------------
+function animate() {
+    requestAnimationFrame(animate);
+
+    if (document.getElementById("autoRotate").checked && model)
+        model.rotation.y += 0.01;
+
+    controls.update();
+    renderer.render(scene, camera);
+}
+animate();
+
+// ---------------------------
+// Vista AR
+// ---------------------------
+document.getElementById("arBtn").onclick = () => {
+    document.getElementById("arViewer").activateAR();
+};
+
+// ---------------------------
+// Resize
+// ---------------------------
+window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>
